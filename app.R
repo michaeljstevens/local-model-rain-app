@@ -14,13 +14,22 @@ library(DT)
 # --- Helpers -------------------------------------------------------------------
 
 fetch_precip <- function(lat, lon, start, end) {
+  daily <- paste(
+    "precipitation_sum,precipitation_hours",
+    "temperature_2m_max,temperature_2m_min,temperature_2m_mean",
+    "apparent_temperature_mean",
+    "relative_humidity_2m_mean",
+    "wind_speed_10m_mean,wind_speed_10m_max,wind_gusts_10m_max",
+    "pressure_msl_mean,cloud_cover_mean,weather_code",
+    sep = ","
+  )
   url <- paste0(
     "https://archive-api.open-meteo.com/v1/archive",
     "?latitude=", lat,
     "&longitude=", lon,
     "&start_date=", format(start, "%Y-%m-%d"),
     "&end_date=", format(end, "%Y-%m-%d"),
-    "&daily=precipitation_sum,precipitation_hours",
+    "&daily=", daily,
     "&timezone=auto"
   )
   raw <- fromJSON(url)
@@ -28,11 +37,38 @@ fetch_precip <- function(lat, lon, start, end) {
     stop("API error: ", paste(raw$error, collapse = " "))
   }
   data.frame(
-    date   = as.Date(raw$daily$time),
-    precip = raw$daily$precipitation_sum,
-    hours  = raw$daily$precipitation_hours
+    date        = as.Date(raw$daily$time),
+    precip      = raw$daily$precipitation_sum,
+    hours       = raw$daily$precipitation_hours,
+    temp_max    = raw$daily$temperature_2m_max,
+    temp_min    = raw$daily$temperature_2m_min,
+    temp_mean   = raw$daily$temperature_2m_mean,
+    apparent    = raw$daily$apparent_temperature_mean,
+    humidity    = raw$daily$relative_humidity_2m_mean,
+    wind_mean   = raw$daily$wind_speed_10m_mean,
+    wind_max    = raw$daily$wind_speed_10m_max,
+    gust_max    = raw$daily$wind_gusts_10m_max,
+    pressure    = raw$daily$pressure_msl_mean,
+    cloud       = raw$daily$cloud_cover_mean,
+    weather_code = raw$daily$weather_code
   )
 }
+
+# Plot variables: name -> list of display label and unit. Each plots on its own
+# y-axis since the units differ, so the picker shows one at a time.
+plot_vars <- list(
+  precip    = list(label = "Precipitation (mm)",  unit = "mm"),
+  temp_mean = list(label = "Mean temp (°C)",       unit = "°C"),
+  temp_max  = list(label = "Max temp (°C)",        unit = "°C"),
+  temp_min  = list(label = "Min temp (°C)",        unit = "°C"),
+  apparent  = list(label = "Feels-like (°C)",      unit = "°C"),
+  humidity  = list(label = "Humidity (%)",         unit = "%"),
+  wind_mean = list(label = "Wind (km/h)",          unit = "km/h"),
+  wind_max  = list(label = "Max wind (km/h)",      unit = "km/h"),
+  gust_max  = list(label = "Gusts (km/h)",         unit = "km/h"),
+  pressure  = list(label = "Pressure (hPa)",       unit = "hPa"),
+  cloud     = list(label = "Cloud cover (%)",      unit = "%")
+)
 
 # Roll up daily data to the requested granularity
 roll_up <- function(d, level) {
@@ -49,12 +85,33 @@ roll_up <- function(d, level) {
   d |>
     group_by(period) |>
     summarise(
-      events = sum(precip > 0.01),   # must run before `precip` is shadowed
-      precip = sum(precip, na.rm = TRUE),
-      hours  = sum(hours, na.rm = TRUE),
+      events     = sum(precip > 0.01),   # must run before `precip` is shadowed
+      precip     = sum(precip, na.rm = TRUE),
+      hours      = sum(hours, na.rm = TRUE),
+      temp_max   = max(temp_max,   na.rm = TRUE),
+      temp_min   = min(temp_min,   na.rm = TRUE),
+      temp_mean  = mean(temp_mean, na.rm = TRUE),
+      apparent   = mean(apparent,  na.rm = TRUE),
+      humidity   = mean(humidity,  na.rm = TRUE),
+      wind_mean  = mean(wind_mean, na.rm = TRUE),
+      wind_max   = max(wind_max,   na.rm = TRUE),
+      gust_max   = max(gust_max,   na.rm = TRUE),
+      pressure   = mean(pressure,  na.rm = TRUE),
+      cloud      = mean(cloud,     na.rm = TRUE),
+      weather_code = mode_num(weather_code),
       .groups = "drop"
     ) |>
-    select(period, precip, hours, events)
+    select(period, precip, hours, events, temp_max, temp_min, temp_mean,
+           apparent, humidity, wind_mean, wind_max, gust_max, pressure,
+           cloud, weather_code)
+}
+
+# Most common integer value (used for the roll-up weather code)
+mode_num <- function(x) {
+  x <- x[!is.na(x)]
+  if (length(x) == 0) return(NA_real_)
+  tab <- table(x)
+  as.numeric(names(tab)[which.max(tab)])
 }
 
 # Null-coalescing helper
@@ -151,6 +208,11 @@ ui <- page_fluid(
                            "Yearly"    = "year"
                          ),
                          selected = "day",
+                         options = list(dropdownParent = "body")),
+          div(class = "mb-1"),
+          selectizeInput("plot_var", "Plot variable",
+                         choices = names(plot_vars),
+                         selected = "precip",
                          options = list(dropdownParent = "body"))
         )
       ),
@@ -166,17 +228,18 @@ ui <- page_fluid(
         div(
           class = "row g-3",
           div(class = "col-3", card(card_body(
-            div(class = "small text-muted", "Total precip"),
+            div(class = "small text-muted", textOutput("vb1_label")),
             div(class = "fs-3 fw-semibold", textOutput("vb_total"))
-          ))),
-          div(class = "col-3", card(card_body(
-            div(class = "small text-muted", "Wet hours"),
-            div(class = "fs-3 fw-semibold", textOutput("vb_hours"))
           ))),
           div(class = "col-3", card(card_body(
             div(class = "small text-muted", "Max period"),
             div(class = "fs-3 fw-semibold", textOutput("vb_max")),
             div(class = "small text-muted", textOutput("vb_maxdate"))
+          ))),
+          div(class = "col-3", card(card_body(
+            div(class = "small text-muted", "Min period"),
+            div(class = "fs-3 fw-semibold", textOutput("vb_min")),
+            div(class = "small text-muted", textOutput("vb_mindate"))
           ))),
           div(class = "col-3", card(card_body(
             div(class = "small text-muted", "Periods"),
@@ -312,32 +375,65 @@ server <- function(input, output, session) {
     roll_up(d, input$rollup)
   })
 
-  # --- Stats ---------------------------------------------------------------------
+  # --- Stats (follow the selected plot variable) ---------------------------------
+  # Per-variable summary: which aggregate (sum vs mean) and the unit.
+  summary_word <- function(v) if (v == "precip") "Total" else "Mean"
+  var_sum <- function(v, a) switch(v,
+    precip = sum(a$precip, na.rm = TRUE),
+    temp_mean = mean(a$temp_mean, na.rm = TRUE),
+    temp_max = mean(a$temp_max, na.rm = TRUE),
+    temp_min = mean(a$temp_min, na.rm = TRUE),
+    apparent = mean(a$apparent, na.rm = TRUE),
+    humidity = mean(a$humidity, na.rm = TRUE),
+    wind_mean = mean(a$wind_mean, na.rm = TRUE),
+    wind_max = max(a$wind_max, na.rm = TRUE),
+    gust_max = max(a$gust_max, na.rm = TRUE),
+    pressure = mean(a$pressure, na.rm = TRUE),
+    cloud = mean(a$cloud, na.rm = TRUE))
+  var_unit <- function(v) plot_vars[[v]]$unit
+  fmt <- function(x, unit) {
+    if (is.na(x)) return("—")
+    sprintf("%.1f %s", x, unit)
+  }
+  fmt_period <- function(p) switch(input$rollup,
+    day     = format(p, "%b %d, %Y"),
+    week    = paste("wk of", format(p, "%b %d")),
+    month   = format(p, "%b %Y"),
+    quarter = sprintf("Q%d %d", quarter(p), year(p)),
+    year    = format(p, "%Y"))
+
+  output$vb1_label <- renderText({
+    v <- input$plot_var
+    paste0(summary_word(v), " ", plot_vars[[v]]$label)
+  })
   output$vb_total <- renderText({
     a <- agg()
     if (is.null(a)) return("—")
-    sprintf("%.1f mm", sum(a$precip, na.rm = TRUE))
-  })
-  output$vb_hours <- renderText({
-    a <- agg()
-    if (is.null(a)) return("—")
-    sprintf("%.0f hrs", sum(a$hours, na.rm = TRUE))
+    fmt(var_sum(input$plot_var, a), var_unit(input$plot_var))
   })
   output$vb_max <- renderText({
     a <- agg()
     if (is.null(a)) return("—")
-    sprintf("%.1f mm", max(a$precip))
+    v <- input$plot_var
+    fmt(max(a[[v]], na.rm = TRUE), var_unit(v))
   })
   output$vb_maxdate <- renderText({
     a <- agg()
     if (is.null(a)) return("")
-    p <- max(a$period)
-    switch(input$rollup,
-           day     = format(p, "%b %d, %Y"),
-           week    = paste("wk of", format(p, "%b %d")),
-           month   = format(p, "%b %Y"),
-           quarter = sprintf("Q%d %d", quarter(p), year(p)),
-           year    = format(p, "%Y"))
+    v <- input$plot_var
+    fmt_period(a$period[which.max(a[[v]])])
+  })
+  output$vb_min <- renderText({
+    a <- agg()
+    if (is.null(a)) return("—")
+    v <- input$plot_var
+    fmt(min(a[[v]], na.rm = TRUE), var_unit(v))
+  })
+  output$vb_mindate <- renderText({
+    a <- agg()
+    if (is.null(a)) return("")
+    v <- input$plot_var
+    fmt_period(a$period[which.min(a[[v]])])
   })
   output$vb_n <- renderText({
     a <- agg()
@@ -353,22 +449,27 @@ server <- function(input, output, session) {
       return(invisible())
     }
 
-    p <- ggplot(a, aes(x = period, y = precip))
+    varname <- input$plot_var
+    meta <- plot_vars[[varname]]
+    a <- a |> mutate(plot_val = .data[[varname]])
 
-    if (input$rollup %in% c("quarter", "year")) {
-      p <- p +
-        geom_col(fill = "#2e6fb5", width = 0.8) +
+    # Precipitation and wind look best as bars for coarser periods; continuous
+    # variables like temperature read better as lines.
+    bar_vars <- c("precip", "wind_max", "gust_max")
+    use_bar <- varname %in% bar_vars && input$rollup %in% c("quarter", "year")
+
+    p <- ggplot(a, aes(x = period, y = plot_val))
+    p <- if (use_bar) {
+      p + geom_col(fill = "#2e6fb5", width = 0.8) +
         geom_point(color = "#2e6fb5", size = 2)
     } else {
-      p <- p +
-        geom_col(fill = "#2e6fb5", width = 0.8, alpha = 0.85) +
-        geom_line(color = "#2e6fb5", linewidth = 0.6) +
+      p + geom_line(color = "#2e6fb5", linewidth = 0.7) +
         geom_point(color = "#2e6fb5", size = 1.5)
     }
 
     p +
-      labs(x = NULL, y = "Precipitation (mm)",
-           title = paste0("Precipitation — ", place(), " (", input$rollup, ")")) +
+      labs(x = NULL, y = meta$label,
+           title = paste0(meta$label, " — ", place(), " (", input$rollup, ")")) +
       theme_minimal()
   })
 
