@@ -97,6 +97,39 @@ fetch_hourly <- function(lat, lon, start, end) {
   )
 }
 
+# Hourly forecast: hourly= variables on the forecast endpoint. Returns the
+# same frame shape as fetch_hourly() (POSIXct `date` column).
+fetch_forecast_hourly <- function(lat, lon, days = 7) {
+  hourly <- paste(
+    "temperature_2m,precipitation,relative_humidity_2m",
+    "pressure_msl,cloud_cover,weather_code,wind_speed_10m,wind_gusts_10m",
+    sep = ","
+  )
+  url <- paste0(
+    "https://api.open-meteo.com/v1/forecast",
+    "?latitude=", lat,
+    "&longitude=", lon,
+    "&forecast_days=", days,
+    "&hourly=", hourly,
+    "&timezone=auto"
+  )
+  raw <- fromJSON(url)
+  if (!is.null(raw$error)) {
+    stop("API error: ", paste(raw$error, collapse = " "))
+  }
+  data.frame(
+    date       = as.POSIXct(raw$hourly$time, tz = "UTC"),
+    temp       = raw$hourly$temperature_2m,
+    precip     = raw$hourly$precipitation,
+    humidity   = raw$hourly$relative_humidity_2m,
+    pressure   = raw$hourly$pressure_msl,
+    cloud      = raw$hourly$cloud_cover,
+    weather_code = raw$hourly$weather_code,
+    wind_mean  = raw$hourly$wind_speed_10m,
+    gust_max   = raw$hourly$wind_gusts_10m
+  )
+}
+
 # Forecast: same daily variables as fetch_precip(), but from the forecast
 # endpoint (api.open-meteo.com) with forecast_days (1-16) instead of a
 # start/end date range. Returns an identical data.frame shape.
@@ -321,6 +354,13 @@ ui <- page_fluid(
       card(
         card_title("Forecast"),
         card_body(
+          selectizeInput("forecast_source", "Resolution",
+                         choices = c(
+                           "Daily"  = "daily",
+                           "Hourly" = "hourly"
+                         ),
+                         selected = "daily",
+                         options = list(dropdownParent = "body")),
           numericInput("forecast_days", "Days ahead", value = 7,
                        min = 1, max = 16, step = 1),
           div(class = "mb-2",
@@ -553,8 +593,10 @@ server <- function(input, output, session) {
 
     status("Fetching forecast from Open-Meteo…")
 
+    hourly_forecast <- input$forecast_source == "hourly"
     res <- tryCatch(
-      fetch_forecast(lat, lon, days),
+      if (hourly_forecast) fetch_forecast_hourly(lat, lon, days)
+      else                 fetch_forecast(lat, lon, days),
       error = function(e) {
         status(paste("Error:", conditionMessage(e)))
         NULL
@@ -567,12 +609,19 @@ server <- function(input, output, session) {
     }
 
     recs(res)
-    src("forecast")
+    # "hourly" lets the Hourly granularity show per-hour periods
+    src(if (hourly_forecast) "hourly" else "forecast")
     place(input$place_name %||% paste0(lat, ", ", lon))
 
-    status(sprintf("Forecast: %d days | %.1f mm total | %s",
-                   nrow(res), sum(res$precip, na.rm = TRUE), place()))
-    toast(sprintf("Loaded %d-day forecast", nrow(res)), type = "success")
+    if (hourly_forecast) {
+      status(sprintf("Forecast: %d hours (%d days) | %.1f mm total | %s",
+                     nrow(res), days, sum(res$precip, na.rm = TRUE), place()))
+      toast(sprintf("Loaded %d-hour forecast", nrow(res)), type = "success")
+    } else {
+      status(sprintf("Forecast: %d days | %.1f mm total | %s",
+                     nrow(res), sum(res$precip, na.rm = TRUE), place()))
+      toast(sprintf("Loaded %d-day forecast", nrow(res)), type = "success")
+    }
   })
 
   # --- Aggregated data ----------------------------------------------------------
