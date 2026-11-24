@@ -21,6 +21,8 @@ and lets you explore it at different time granularities.
   chart and the stat cards at any fetched variable. Each plots on its own
   axis (units differ), and the stat cards report the right aggregate
   (total vs. mean) and unit for the selection.
+- **Rainfall units** — a toggle switches precipitation between millimetres
+  (default) and inches across the stat cards, chart, table, and status line.
 - **Summary stats** — a stat card for the selected variable (total/mean),
   plus its max and min periods with dates, and the number of periods.
 - **Chart** — a ggplot2 chart of the selected variable by period: bars for

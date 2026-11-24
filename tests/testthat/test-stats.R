@@ -176,3 +176,50 @@ test_that("cards show em-dash placeholders when no data is loaded", {
     expect_equal(pv_ms$output$vb_mindate, "")
   })
 })
+
+
+test_that("precip_convert and precip_fmt convert mm to inches", {
+  expect_equal(precip_convert(25.4, "mm"), 25.4)
+  expect_equal(precip_convert(c(25.4, 50.8), "in"), c(1, 2))
+  expect_equal(precip_fmt(12.34, "mm"), "12.3 mm")
+  expect_equal(precip_fmt(25.4, "in"), "1.00 in")
+  expect_equal(precip_fmt(12.7, "in"), "0.50 in")
+})
+
+test_that("precip stat cards follow the inches toggle", {
+  pv_d <- pv_make_full_daily("2026-01-01", 41)
+  run_pv_stats(pv_d, function(pv_ms) {
+    a <- roll_up(pv_d, "month")
+    # Default is mm
+    expect_equal(pv_ms$output$vb1_label, "Total Precipitation (mm)")
+    pv_ms$setInputs(precip_units = "in")
+    pv_ms$elapse(0.1)
+    pv_ms$flushReact()
+    expect_equal(pv_ms$output$vb1_label, "Total Precipitation (in)")
+    expect_equal(pv_ms$output$vb_total,
+                 sprintf("%.2f in", sum(a$precip) / 25.4))
+    expect_equal(pv_ms$output$vb_max,
+                 sprintf("%.2f in", max(a$precip) / 25.4))
+    expect_equal(pv_ms$output$vb_min,
+                 sprintf("%.2f in", min(a$precip) / 25.4))
+    # Back to mm
+    pv_ms$setInputs(precip_units = "mm")
+    pv_ms$elapse(0.1)
+    pv_ms$flushReact()
+    expect_equal(pv_ms$output$vb_total,
+                 sprintf("%.1f mm", sum(a$precip)))
+  })
+})
+
+test_that("non-precip variables ignore the units toggle", {
+  pv_d <- pv_make_full_daily("2026-01-01", 41)
+  run_pv_stats(pv_d, function(pv_ms) {
+    pv_ms$setInputs(plot_var = "temp_mean", precip_units = "in")
+    pv_ms$elapse(0.1)
+    pv_ms$flushReact()
+    a <- roll_up(pv_d, "month")
+    expect_equal(pv_ms$output$vb1_label, "Mean Mean temp (°C)")
+    expect_equal(pv_ms$output$vb_total,
+                 sprintf("%.1f °C", mean(a$temp_mean)))
+  })
+})

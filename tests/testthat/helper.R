@@ -18,3 +18,5 @@ roll_up_hourly_daily <- app_env$roll_up_hourly_daily
 mode_num     <- app_env$mode_num
 plot_vars    <- app_env$plot_vars
 `%||%`       <- app_env$`%||%`
+precip_convert <- app_env$precip_convert
+precip_fmt     <- app_env$precip_fmt

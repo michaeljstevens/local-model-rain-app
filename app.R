@@ -189,6 +189,16 @@ plot_vars <- list(
   cloud     = list(label = "Cloud cover (%)",      unit = "%")
 )
 
+# Rainfall display units. Data is always fetched and rolled up in mm; the
+# "Rainfall units" toggle converts precip at display time (stats, plot,
+# table, status line).
+mm_per_inch <- 25.4
+precip_convert <- function(x, units) if (identical(units, "in")) x / mm_per_inch else x
+precip_fmt <- function(x_mm, units) {
+  if (identical(units, "in")) sprintf("%.2f in", x_mm / mm_per_inch)
+  else sprintf("%.1f mm", x_mm)
+}
+
 # Roll up data to the requested granularity. Daily input (Date column)
 # groups by calendar period. Hourly input (POSIXct column) is first reduced
 # to daily via roll_up_hourly_daily(), except at the "hour" level where
@@ -408,7 +418,10 @@ ui <- page_fluid(
           selectizeInput("plot_var", "Plot variable",
                          choices = names(plot_vars),
                          selected = "precip",
-                         options = list(dropdownParent = "body"))
+                         options = list(dropdownParent = "body")),
+          radioButtons("precip_units", "Rainfall units",
+                       choices = c("mm" = "mm", "inches" = "in"),
+                       selected = "mm", inline = TRUE)
         )
       ),
       class = "mb-3",
@@ -564,14 +577,16 @@ server <- function(input, output, session) {
     if (hourly_source) {
       # The data is one row per hour; roll_up() reduces it to days.
       d <- roll_up_hourly_daily(res)
-      status(sprintf("%d hours (%d days) | %d wet days | %.1f mm total | %s",
-                     nrow(res), nrow(d), sum(d$precip > 0.01, na.rm = TRUE),
-                     sum(d$precip, na.rm = TRUE), place()))
+      n_h <- nrow(res); n_d <- nrow(d); wet <- sum(d$precip > 0.01, na.rm = TRUE)
+      tot <- sum(d$precip, na.rm = TRUE); pl <- place()
+      status(function(u) sprintf("%d hours (%d days) | %d wet days | %s total | %s",
+                                 n_h, n_d, wet, precip_fmt(tot, u), pl))
       toast(sprintf("Loaded %d hours of data", nrow(res)), type = "success")
     } else {
-      status(sprintf("%d days | %d wet days | %.1f mm total | %s",
-                     nrow(res), sum(res$precip > 0.01, na.rm = TRUE),
-                     sum(res$precip, na.rm = TRUE), place()))
+      n_d <- nrow(res); wet <- sum(res$precip > 0.01, na.rm = TRUE)
+      tot <- sum(res$precip, na.rm = TRUE); pl <- place()
+      status(function(u) sprintf("%d days | %d wet days | %s total | %s",
+                                 n_d, wet, precip_fmt(tot, u), pl))
       toast(sprintf("Loaded %d days of data", nrow(res)), type = "success")
     }
   })
@@ -614,12 +629,14 @@ server <- function(input, output, session) {
     place(input$place_name %||% paste0(lat, ", ", lon))
 
     if (hourly_forecast) {
-      status(sprintf("Forecast: %d hours (%d days) | %.1f mm total | %s",
-                     nrow(res), days, sum(res$precip, na.rm = TRUE), place()))
+      n_h <- nrow(res); tot <- sum(res$precip, na.rm = TRUE); pl <- place()
+      status(function(u) sprintf("Forecast: %d hours (%d days) | %s total | %s",
+                                 n_h, days, precip_fmt(tot, u), pl))
       toast(sprintf("Loaded %d-hour forecast", nrow(res)), type = "success")
     } else {
-      status(sprintf("Forecast: %d days | %.1f mm total | %s",
-                     nrow(res), sum(res$precip, na.rm = TRUE), place()))
+      n_d <- nrow(res); tot <- sum(res$precip, na.rm = TRUE); pl <- place()
+      status(function(u) sprintf("Forecast: %d days | %s total | %s",
+                                 n_d, precip_fmt(tot, u), pl))
       toast(sprintf("Loaded %d-day forecast", nrow(res)), type = "success")
     }
   })
@@ -633,10 +650,16 @@ server <- function(input, output, session) {
     } else input$rollup
   })
 
+  # Selected rainfall display units ("mm" | "in"); NULL-safe for tests.
+  units <- reactive(input$precip_units %||% "mm")
+
+  # Rolled up in mm, then precip converted to the display units.
   agg <- reactive({
     d <- recs()
     if (is.null(d) || nrow(d) == 0) return(NULL)
-    roll_up(d, lvl())
+    a <- roll_up(d, lvl())
+    if (nrow(a) > 0) a$precip <- precip_convert(a$precip, units())
+    a
   })
 
   # --- Stats (follow the selected plot variable) ---------------------------------
@@ -654,10 +677,15 @@ server <- function(input, output, session) {
     gust_max = max(a$gust_max, na.rm = TRUE),
     pressure = mean(a$pressure, na.rm = TRUE),
     cloud = mean(a$cloud, na.rm = TRUE))
-  var_unit <- function(v) plot_vars[[v]]$unit
+  var_unit <- function(v) {
+    if (v == "precip" && units() == "in") "in" else plot_vars[[v]]$unit
+  }
+  var_label <- function(v) {
+    if (v == "precip" && units() == "in") "Precipitation (in)" else plot_vars[[v]]$label
+  }
   fmt <- function(x, unit) {
     if (is.na(x)) return("—")
-    sprintf("%.1f %s", x, unit)
+    sprintf(if (unit == "in") "%.2f %s" else "%.1f %s", x, unit)
   }
   fmt_period <- function(p) switch(lvl(),
     hour    = format(p, "%b %d, %Y %H:%M"),
@@ -669,7 +697,7 @@ server <- function(input, output, session) {
 
   output$vb1_label <- renderText({
     v <- input$plot_var
-    paste0(summary_word(v), " ", plot_vars[[v]]$label)
+    paste0(summary_word(v), " ", var_label(v))
   })
   output$vb_total <- renderText({
     a <- agg()
@@ -715,7 +743,7 @@ server <- function(input, output, session) {
     }
 
     varname <- input$plot_var
-    meta <- plot_vars[[varname]]
+    ylab <- var_label(varname)
     a <- a |> mutate(plot_val = .data[[varname]])
 
     # Precipitation and wind look best as bars for coarser periods; continuous
@@ -733,20 +761,29 @@ server <- function(input, output, session) {
     }
 
     p +
-      labs(x = NULL, y = meta$label,
-           title = paste0(meta$label, " — ", place(), " (", lvl(), ")")) +
+      labs(x = NULL, y = ylab,
+           title = paste0(ylab, " — ", place(), " (", lvl(), ")")) +
       theme_minimal()
   })
 
   # --- Table -----------------------------------------------------------------------
-  output$dt_records <- renderDT(
-    agg(),
+  # The precip column header carries the selected unit.
+  output$dt_records <- renderDT({
+    a <- agg()
+    if (!is.null(a)) names(a)[names(a) == "precip"] <- paste0("precip (", units(), ")")
+    a
+  },
     options = list(pageLength = 15, dom = "tp", lengthChange = FALSE),
     rownames = FALSE
   )
 
   # --- Status -----------------------------------------------------------------------
-  output$data_status <- renderText(status())
+  # Status is a string, or a function of the rainfall units for messages
+  # that report a precip total (so they follow the toggle).
+  output$data_status <- renderText({
+    s <- status()
+    if (is.function(s)) s(units()) else s
+  })
 }
 
 shinyApp(ui, server)

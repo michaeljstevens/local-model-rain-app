@@ -66,6 +66,13 @@ so no UI changes are needed for a new variable.
 `plot_vars` (in `app.R`) maps column name -> `list(label=, unit=)`. Each
 variable plots on its own y-axis because units differ.
 
+**Rainfall units**: the Roll-up card's "Rainfall units" radio
+(`input$precip_units`, `"mm"` default | `"in"`) is display-only. Fetch and
+`roll_up()` always work in mm; the server's `agg()` reactive converts
+`precip` via `precip_convert()`, and `var_unit()`/`var_label()`/`fmt()`
+switch to "in" (2 decimals). Status messages that report a precip total are
+stored as a `function(units)` in `status()` so they follow the toggle.
+
 ## Roll-up semantics (`roll_up()`)
 
 - sum: `precip`, `hours`
