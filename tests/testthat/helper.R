@@ -9,8 +9,11 @@ app_env <- new.env()
 sys.source("../../app.R", envir = app_env, keep.source = TRUE)
 
 # Attach the pieces the tests need
-fetch_precip <- app_env$fetch_precip
-roll_up      <- app_env$roll_up
+fetch_precip        <- app_env$fetch_precip
+fetch_forecast      <- app_env$fetch_forecast
+fetch_hourly        <- app_env$fetch_hourly
+roll_up             <- app_env$roll_up
+roll_up_hourly_daily <- app_env$roll_up_hourly_daily
 mode_num     <- app_env$mode_num
 plot_vars    <- app_env$plot_vars
 `%||%`       <- app_env$`%||%`

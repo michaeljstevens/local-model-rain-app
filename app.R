@@ -13,6 +13,8 @@ library(DT)
 
 # --- Helpers -------------------------------------------------------------------
 
+# For date ranges of <= 92 days the API returns one JSON object; longer
+# ranges come back as a list of yearly objects — `dailys` normalises both.
 fetch_precip <- function(lat, lon, start, end) {
   daily <- paste(
     "precipitation_sum,precipitation_hours",
@@ -29,6 +31,90 @@ fetch_precip <- function(lat, lon, start, end) {
     "&longitude=", lon,
     "&start_date=", format(start, "%Y-%m-%d"),
     "&end_date=", format(end, "%Y-%m-%d"),
+    "&daily=", daily,
+    "&timezone=auto"
+  )
+  raw <- fromJSON(url)
+  if (is.list(raw) && !is.null(raw$error)) {
+    stop("API error: ", paste(raw$error, collapse = " "))
+  }
+  # The API returns one object for ranges of <= 92 days and a list of
+  # yearly objects for longer ones — normalise to a single daily table.
+  daily_df <- if (is.list(raw$daily)) raw$daily
+              else do.call(rbind, lapply(as.list(raw), function(x) x$daily))
+  data.frame(
+    date        = as.Date(daily_df$time),
+    precip      = daily_df$precipitation_sum,
+    hours       = daily_df$precipitation_hours,
+    temp_max    = daily_df$temperature_2m_max,
+    temp_min    = daily_df$temperature_2m_min,
+    temp_mean   = daily_df$temperature_2m_mean,
+    apparent    = daily_df$apparent_temperature_mean,
+    humidity    = daily_df$relative_humidity_2m_mean,
+    wind_mean   = daily_df$wind_speed_10m_mean,
+    wind_max    = daily_df$wind_speed_10m_max,
+    gust_max    = daily_df$wind_gusts_10m_max,
+    pressure    = daily_df$pressure_msl_mean,
+    cloud       = daily_df$cloud_cover_mean,
+    weather_code = daily_df$weather_code
+  )
+}
+
+# Hourly data for a date range, same endpoint as fetch_precip(). The API
+# returns one object for <= 92 days and a list of yearly objects for longer
+# ranges — `hourlys` normalises both.
+fetch_hourly <- function(lat, lon, start, end) {
+  hourly <- paste(
+    "temperature_2m,precipitation,relative_humidity_2m",
+    "pressure_msl,cloud_cover,weather_code,wind_speed_10m,wind_gusts_10m",
+    sep = ","
+  )
+  url <- paste0(
+    "https://archive-api.open-meteo.com/v1/archive",
+    "?latitude=", lat,
+    "&longitude=", lon,
+    "&start_date=", format(start, "%Y-%m-%d"),
+    "&end_date=", format(end, "%Y-%m-%d"),
+    "&hourly=", hourly,
+    "&timezone=auto"
+  )
+  raw <- fromJSON(url)
+  if (is.list(raw) && !is.null(raw$error)) {
+    stop("API error: ", paste(raw$error, collapse = " "))
+  }
+  hourly_df <- if (is.list(raw$hourly)) raw$hourly
+               else do.call(rbind, lapply(as.list(raw), function(x) x$hourly))
+  data.frame(
+    date       = as.POSIXct(hourly_df$time, tz = "UTC"),
+    temp       = hourly_df$temperature_2m,
+    precip     = hourly_df$precipitation,
+    humidity   = hourly_df$relative_humidity_2m,
+    pressure   = hourly_df$pressure_msl,
+    cloud      = hourly_df$cloud_cover,
+    weather_code = hourly_df$weather_code,
+    wind_mean  = hourly_df$wind_speed_10m,
+    gust_max   = hourly_df$wind_gusts_10m
+  )
+}
+
+# Forecast: same daily variables as fetch_precip(), but from the forecast
+# endpoint (api.open-meteo.com) with forecast_days (1-16) instead of a
+# start/end date range. Returns an identical data.frame shape.
+fetch_forecast <- function(lat, lon, days = 7) {
+  daily <- paste(
+    "precipitation_sum,precipitation_hours",
+    "temperature_2m_max,temperature_2m_min,temperature_2m_mean",
+    "apparent_temperature_mean",
+    "relative_humidity_2m_mean",
+    "wind_speed_10m_mean,wind_speed_10m_max,wind_gusts_10m_max",
+    "pressure_msl_mean,cloud_cover_mean,weather_code",
+    sep = ","
+  )
+  url <- paste0(
+    "https://api.open-meteo.com/v1/forecast",
+    "?latitude=", lat,
+    "&longitude=", lon,
+    "&forecast_days=", days,
     "&daily=", daily,
     "&timezone=auto"
   )
@@ -70,12 +156,31 @@ plot_vars <- list(
   cloud     = list(label = "Cloud cover (%)",      unit = "%")
 )
 
-# Roll up daily data to the requested granularity
+# Roll up data to the requested granularity. Daily input (Date column)
+# groups by calendar period. Hourly input (POSIXct column) is first reduced
+# to daily via roll_up_hourly_daily(), except at the "hour" level where
+# each hour is its own period.
 roll_up <- function(d, level) {
   d <- d |> filter(!is.na(precip))
   if (nrow(d) == 0) return(d)
   d <- d |> arrange(date)
+  if (is.POSIXct(d$date)) {
+    if (level == "hour") {
+      return(d |>
+        select(date, precip, temp, humidity, pressure, cloud,
+               weather_code, wind_mean, gust_max) |>
+        mutate(temp_max = temp, temp_min = temp, temp_mean = temp,
+               wind_max = wind_mean, apparent = NA_real_,
+               hours  = as.integer(precip > 0.1),
+               events = as.integer(precip > 0.01)) |>
+        select(period = date, precip, hours, events, temp_max, temp_min,
+               temp_mean, apparent, humidity, wind_mean, wind_max,
+               gust_max, pressure, cloud, weather_code))
+    }
+    d <- roll_up_hourly_daily(d)
+  }
   period <- switch(level,
+                   hour    = d$date,
                    day     = floor_date(d$date, "day"),
                    week    = floor_date(d$date, "week"),
                    month   = floor_date(d$date, "month"),
@@ -104,6 +209,36 @@ roll_up <- function(d, level) {
     select(period, precip, hours, events, temp_max, temp_min, temp_mean,
            apparent, humidity, wind_mean, wind_max, gust_max, pressure,
            cloud, weather_code)
+}
+
+# Reduce hourly data to a daily frame shaped like fetch_precip()'s output
+# (minus `apparent`, which the API doesn't serve hourly), so roll_up() and
+# the rest of the pipeline work unchanged.
+roll_up_hourly_daily <- function(h) {
+  h <- h |> filter(!is.na(precip))
+  if (nrow(h) == 0) return(h)
+  h$day <- as.Date(h$date)
+  h |>
+    group_by(day) |>
+    summarise(
+      date       = first(day),
+      events     = sum(precip > 0.01),
+      precip     = sum(precip, na.rm = TRUE),
+      hours      = sum(precip > 0.1),
+      temp_max   = max(temp,     na.rm = TRUE),
+      temp_min   = min(temp,     na.rm = TRUE),
+      temp_mean  = mean(temp,    na.rm = TRUE),
+      apparent   = NA_real_,
+      humidity   = mean(humidity,   na.rm = TRUE),
+      wind_mean  = mean(wind_mean,  na.rm = TRUE),
+      wind_max   = max(wind_mean,   na.rm = TRUE),
+      gust_max   = max(gust_max,    na.rm = TRUE),
+      pressure   = mean(pressure,   na.rm = TRUE),
+      cloud      = mean(cloud,      na.rm = TRUE),
+      weather_code = mode_num(weather_code),
+      .groups = "drop"
+    ) |>
+    select(-day)
 }
 
 # Most common integer value (used for the roll-up weather code)
@@ -166,12 +301,31 @@ ui <- page_fluid(
       card(
         card_title("Date range"),
         card_body(
+          selectizeInput("source", "Data source",
+                         choices = c(
+                           "Archive" = "archive",
+                           "Hourly"  = "hourly"
+                         ),
+                         selected = "archive",
+                         options = list(dropdownParent = "body")),
           dateRangeInput("date_range", "Range",
                          start = Sys.Date() - 365,
                          end   = Sys.Date()),
           div(class = "mb-2",
               actionButton("fetch_btn", "Fetch data",
                            icon = icon("download"), width = "100%"))
+        )
+      ),
+      class = "mb-3",
+
+      card(
+        card_title("Forecast"),
+        card_body(
+          numericInput("forecast_days", "Days ahead", value = 7,
+                       min = 1, max = 16, step = 1),
+          div(class = "mb-2",
+              actionButton("fetch_forecast_btn", "Fetch forecast",
+                           icon = icon("cloud-sun"), width = "100%"))
         )
       ),
       class = "mb-3",
@@ -201,6 +355,7 @@ ui <- page_fluid(
           # instead of being clipped by its overflow.
           selectizeInput("rollup", "Granularity",
                          choices = c(
+                           "Hourly"    = "hour",
                            "Daily"     = "day",
                            "Weekly"    = "week",
                            "Monthly"   = "month",
@@ -263,9 +418,10 @@ ui <- page_fluid(
 # --- Server ----------------------------------------------------------------------
 server <- function(input, output, session) {
 
-  recs   <- reactiveVal(NULL)
-  status <- reactiveVal("No data loaded yet. Set a location and press Fetch.")
-  place  <- reactiveVal("")
+  recs    <- reactiveVal(NULL)
+  src     <- reactiveVal("archive")   # "archive" | "hourly" | "forecast"
+  status  <- reactiveVal("No data loaded yet. Set a location and press Fetch.")
+  place   <- reactiveVal("")
 
   # --- Saved presets (persisted to CSV) -------------------------------------
   # presets.csv is read at build time (initial_presets above), so the dropdown
@@ -346,8 +502,10 @@ server <- function(input, output, session) {
 
     status("Fetching from Open-Meteo…")
 
+    hourly_source <- input$source == "hourly"
     res <- tryCatch(
-      fetch_precip(lat, lon, dr[1], dr[2]),
+      if (hourly_source) fetch_hourly(lat, lon, dr[1], dr[2])
+      else               fetch_precip(lat, lon, dr[1], dr[2]),
       error = function(e) {
         status(paste("Error:", conditionMessage(e)))
         NULL
@@ -360,19 +518,76 @@ server <- function(input, output, session) {
     }
 
     recs(res)
+    src(if (hourly_source) "hourly" else "archive")
     place(input$place_name %||% paste0(lat, ", ", lon))
 
-    status(sprintf("%d days | %d wet days | %.1f mm total | %s",
-                   nrow(res), sum(res$precip > 0.01, na.rm = TRUE),
-                   sum(res$precip, na.rm = TRUE), place()))
-    toast(sprintf("Loaded %d days of data", nrow(res)), type = "success")
+    if (hourly_source) {
+      # The data is one row per hour; roll_up() reduces it to days.
+      d <- roll_up_hourly_daily(res)
+      status(sprintf("%d hours (%d days) | %d wet days | %.1f mm total | %s",
+                     nrow(res), nrow(d), sum(d$precip > 0.01, na.rm = TRUE),
+                     sum(d$precip, na.rm = TRUE), place()))
+      toast(sprintf("Loaded %d hours of data", nrow(res)), type = "success")
+    } else {
+      status(sprintf("%d days | %d wet days | %.1f mm total | %s",
+                     nrow(res), sum(res$precip > 0.01, na.rm = TRUE),
+                     sum(res$precip, na.rm = TRUE), place()))
+      toast(sprintf("Loaded %d days of data", nrow(res)), type = "success")
+    }
+  })
+
+  # --- Fetch forecast -----------------------------------------------------------
+  observeEvent(input$fetch_forecast_btn, {
+    lat <- input$lat
+    lon <- input$lon
+    days <- input$forecast_days
+
+    if (is.null(lat) || is.null(lon) || is.na(lat) || is.na(lon)) {
+      toast("Enter valid coordinates", type = "warning")
+      return(invisible())
+    }
+    if (is.null(days) || is.na(days)) {
+      toast("Set the number of forecast days", type = "warning")
+      return(invisible())
+    }
+
+    status("Fetching forecast from Open-Meteo…")
+
+    res <- tryCatch(
+      fetch_forecast(lat, lon, days),
+      error = function(e) {
+        status(paste("Error:", conditionMessage(e)))
+        NULL
+      }
+    )
+
+    if (is.null(res)) {
+      toast("Forecast fetch failed — check coordinates", type = "danger")
+      return(invisible())
+    }
+
+    recs(res)
+    src("forecast")
+    place(input$place_name %||% paste0(lat, ", ", lon))
+
+    status(sprintf("Forecast: %d days | %.1f mm total | %s",
+                   nrow(res), sum(res$precip, na.rm = TRUE), place()))
+    toast(sprintf("Loaded %d-day forecast", nrow(res)), type = "success")
   })
 
   # --- Aggregated data ----------------------------------------------------------
+  # "hour" is only meaningful for hourly data; for archive/forecast data it
+  # falls back to daily grouping.
+  lvl <- reactive({
+    if (input$rollup == "hour") {
+      if (src() == "hourly") "hour" else "day"
+    } else input$rollup
+  })
+
   agg <- reactive({
     d <- recs()
     if (is.null(d) || nrow(d) == 0) return(NULL)
-    roll_up(d, input$rollup)
+    roll_up(d, lvl())
   })
 
   # --- Stats (follow the selected plot variable) ---------------------------------
@@ -395,7 +610,8 @@ server <- function(input, output, session) {
     if (is.na(x)) return("—")
     sprintf("%.1f %s", x, unit)
   }
-  fmt_period <- function(p) switch(input$rollup,
+  fmt_period <- function(p) switch(lvl(),
+    hour    = format(p, "%b %d, %Y %H:%M"),
     day     = format(p, "%b %d, %Y"),
     week    = paste("wk of", format(p, "%b %d")),
     month   = format(p, "%b %Y"),
@@ -456,7 +672,7 @@ server <- function(input, output, session) {
     # Precipitation and wind look best as bars for coarser periods; continuous
     # variables like temperature read better as lines.
     bar_vars <- c("precip", "wind_max", "gust_max")
-    use_bar <- varname %in% bar_vars && input$rollup %in% c("quarter", "year")
+    use_bar <- varname %in% bar_vars && lvl() %in% c("quarter", "year")
 
     p <- ggplot(a, aes(x = period, y = plot_val))
     p <- if (use_bar) {
@@ -469,7 +685,7 @@ server <- function(input, output, session) {
 
     p +
       labs(x = NULL, y = meta$label,
-           title = paste0(meta$label, " — ", place(), " (", input$rollup, ")")) +
+           title = paste0(meta$label, " — ", place(), " (", lvl(), ")")) +
       theme_minimal()
   })
 

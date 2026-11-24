@@ -34,6 +34,25 @@ in-app column names:
 | `cloud_cover_mean`       | `cloud`      |
 | `weather_code`           | `weather_code` |
 
+A second endpoint serves **forecasts**: `https://api.open-meteo.com/v1/forecast`
+(see `fetch_forecast()` in `app.R`). Same `daily=` variables and return shape
+as `fetch_precip()`, but takes `forecast_days=1..16` instead of a date range.
+The sidebar's "Forecast" card fetches it into the same `recs()` pipeline, so
+roll-up, stats, plot, and table all work unchanged.
+
+**Hourly data**: the archive endpoint also serves `hourly=` variables
+(see `fetch_hourly()` in `app.R`). It returns one object for ranges of
+<= 92 days and a **list of yearly objects** for longer ranges — both
+fetchers normalise that. The hourly frame has a POSIXct `date` column;
+`roll_up()` detects that and (a) at the `"hour"` level uses each hour as its
+own period, (b) otherwise reduces to daily via `roll_up_hourly_daily()`
+first, then groups normally. `apparent` is NA in hourly-derived data (the
+API has no hourly apparent temperature). The sidebar's "Data source" picker
+(archive/hourly) selects which fetcher `fetch_btn` uses; a `src` reactiveVal
+tracks the loaded source, and the server's `lvl` reactive maps the "Hourly"
+granularity to `"hour"` only when hourly data is loaded (else falls back to
+daily).
+
 To add a new variable: add it to the `daily=` string in `fetch_precip()`,
 add a column to the returned `data.frame`, add it to `roll_up()`'s
 `summarise()` + `select()`, and (if plottable) add an entry to the
@@ -61,10 +80,15 @@ cd tests && Rscript testthat.R
 ```
 
 - `tests/testthat/helper.R` sources `app.R` into an isolated env and attaches
-  `fetch_precip`, `roll_up`, and `%||%`. If you add a helper the tests should
+  `fetch_precip`, `fetch_forecast`, `fetch_hourly`, `roll_up`,
+  `roll_up_hourly_daily`, and `%||%`. If you add a helper the tests should
   use, attach it there too.
-- Test files: `test-fetch.R`, `test-roll-up.R`, `test-presets.R`,
-  `test-misc.R`.
+- `test-stats.R` clones `app_env$server` and patches its body so the
+  server-local `recs` reactiveVal is initialised from `app_env$pv_injected`.
+  If you rename the server's `recs` line, the patch's pattern match in
+  `run_pv_stats()` will fail loudly.
+- Test files: `test-fetch.R`, `test-forecast.R`, `test-hourly.R`,
+  `test-roll-up.R`, `test-stats.R`, `test-presets.R`, `test-misc.R`.
 - `fetch_precip` tests hit the **live** API, so a network connection is
   required.
 
