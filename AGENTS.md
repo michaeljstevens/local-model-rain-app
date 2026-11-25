@@ -50,12 +50,11 @@ fetchers normalise that. The hourly frame has a POSIXct `date` column;
 `roll_up()` detects that and (a) at the `"hour"` level uses each hour as its
 own period, (b) otherwise reduces to daily via `roll_up_hourly_daily()`
 first, then groups normally. `apparent` is NA in hourly-derived data (the
-API has no hourly apparent temperature). The sidebar's "Data source" picker
-(archive/hourly) selects which fetcher `fetch_btn` uses; a `src` reactiveVal
-tracks the loaded source (`"hourly"` is set by both the hourly archive
-fetch and the hourly forecast), and the server's `lvl` reactive maps the
-"Hourly" granularity to `"hour"` only when `src == "hourly"` (else falls
-back to daily).
+API has no hourly apparent temperature). The sidebar's **Granularity**
+picker (`input$rollup`) is the single control: it also decides which
+fetcher the handlers use — `rollup == "hour"` fetches hourly variables
+(`fetch_hourly` / `fetch_forecast_hourly`), anything else fetches daily.
+The server's `lvl` reactive is just `input$rollup`.
 
 To add a new variable: add it to the `daily=` string in `fetch_precip()`,
 add a column to the returned `data.frame`, add it to `roll_up()`'s

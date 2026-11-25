@@ -355,13 +355,6 @@ ui <- page_fluid(
       card(
         card_title("Date range"),
         card_body(
-          selectizeInput("source", "Data source",
-                         choices = c(
-                           "Archive" = "archive",
-                           "Hourly"  = "hourly"
-                         ),
-                         selected = "archive",
-                         options = list(dropdownParent = "body")),
           dateRangeInput("date_range", "Range",
                          start = Sys.Date() - 365,
                          end   = Sys.Date()),
@@ -375,13 +368,6 @@ ui <- page_fluid(
       card(
         card_title("Forecast"),
         card_body(
-          selectizeInput("forecast_source", "Resolution",
-                         choices = c(
-                           "Daily"  = "daily",
-                           "Hourly" = "hourly"
-                         ),
-                         selected = "daily",
-                         options = list(dropdownParent = "body")),
           numericInput("forecast_days", "Days ahead", value = 7,
                        min = 1, max = 16, step = 1),
           div(class = "mb-2",
@@ -569,7 +555,9 @@ server <- function(input, output, session) {
 
     status("Fetching from Open-Meteo…")
 
-    hourly_source <- input$source == "hourly"
+    # Granularity decides what to fetch: hourly data only exists if we
+    # asked the API for hourly variables.
+    hourly_source <- input$rollup == "hour"
     res <- tryCatch(
       if (hourly_source) fetch_hourly(lat, lon, dr[1], dr[2])
       else               fetch_precip(lat, lon, dr[1], dr[2]),
@@ -585,7 +573,6 @@ server <- function(input, output, session) {
     }
 
     recs(res)
-    src(if (hourly_source) "hourly" else "archive")
     place(input$place_name %||% paste0(lat, ", ", lon))
 
     if (hourly_source) {
@@ -622,7 +609,7 @@ server <- function(input, output, session) {
 
     status("Fetching forecast from Open-Meteo…")
 
-    hourly_forecast <- input$forecast_source == "hourly"
+    hourly_forecast <- input$rollup == "hour"
     res <- tryCatch(
       if (hourly_forecast) fetch_forecast_hourly(lat, lon, days)
       else                 fetch_forecast(lat, lon, days),
@@ -638,8 +625,6 @@ server <- function(input, output, session) {
     }
 
     recs(res)
-    # "hourly" lets the Hourly granularity show per-hour periods
-    src(if (hourly_forecast) "hourly" else "forecast")
     place(input$place_name %||% paste0(lat, ", ", lon))
 
     if (hourly_forecast) {
