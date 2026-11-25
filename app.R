@@ -330,6 +330,17 @@ ui <- page_fluid(
     sidebar = div(
       class = "p-3",
 
+      # Stops the R process. Browsers only let script close tabs it opened, so
+      # if window.close() is refused the page shows a "closed" note instead.
+      actionButton(
+        "close_app", "Close app", icon = icon("power-off"),
+        class = "btn-outline-danger mb-3",
+        onclick = paste0(
+          "setTimeout(function(){window.close();",
+          "document.body.innerHTML='<h4 style=\"margin:2em\">App closed. ",
+          "You can close this tab.</h4>';},300);")
+      ),
+
       card(
         card_title("Location"),
         card_body(
@@ -470,6 +481,9 @@ ui <- page_fluid(
 
 # --- Server ----------------------------------------------------------------------
 server <- function(input, output, session) {
+
+  # "Close app" button (upper left): end the R session's Shiny app.
+  observeEvent(input$close_app, stopApp())
 
   recs    <- reactiveVal(NULL)
   src     <- reactiveVal("archive")   # "archive" | "hourly" | "forecast"
