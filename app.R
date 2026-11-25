@@ -763,7 +763,10 @@ server <- function(input, output, session) {
     p +
       labs(x = NULL, y = ylab,
            title = paste0(ylab, " — ", place(), " (", lvl(), ")")) +
-      theme_minimal()
+      theme_minimal() +
+      # Larger, near-black tick numbers (theme_minimal's default is small grey).
+      theme(axis.text  = element_text(size = 14, colour = "grey10"),
+            axis.title = element_text(size = 14, colour = "grey10"))
   })
 
   # --- Table -----------------------------------------------------------------------
